@@ -4,6 +4,8 @@ import os
 import logging
 import sys
 import argparse
+import cv2
+import numpy as np
 
 try:
     import open3d as o3d

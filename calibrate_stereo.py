@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import stereo_utils
 import sys
+import time
 
 logger = stereo_utils.setup_logging("CalibrateStereo")
 
@@ -37,10 +38,10 @@ def main():
     logger.info("   'q' - Finish capturing and run calibration")
     logger.info("==============================================")
 
-    # Open cameras
+    # Open cameras (Force DirectShow for Windows stability)
     try:
-        cap_left = cv2.VideoCapture(CAM_ID_LEFT)
-        cap_right = cv2.VideoCapture(CAM_ID_RIGHT)
+        cap_left = cv2.VideoCapture(CAM_ID_LEFT, cv2.CAP_DSHOW)
+        cap_right = cv2.VideoCapture(CAM_ID_RIGHT, cv2.CAP_DSHOW)
         if not cap_left.isOpened() or not cap_right.isOpened():
              raise IOError("Cannot open one of the cameras.")
     except Exception as e:
@@ -108,6 +109,9 @@ def main():
 
                 count += 1
                 logger.info(f"Captured Set #{count}")
+                logger.info("Wait... Move board to new position...")
+                time.sleep(1.0) # Debounce and force pause
+                logger.info("Ready for next capture.")
                 
                 # Draw just to show success flash
                 cv2.drawChessboardCorners(display_l, CHESSBOARD_SIZE, corners_l, ret_cb_l)
@@ -127,6 +131,10 @@ def main():
 
     if count < MIN_FRAMES:
         logger.warning(f"You have {count} calibration sets. Recommended: {MIN_FRAMES}+. Results may be poor.")
+    
+    if count == 0:
+        logger.error("No calibration data captured! Exiting.")
+        return
 
     logger.info("Calibrating cameras... This might take a moment.")
     
