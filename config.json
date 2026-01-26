@@ -1,0 +1,26 @@
+{
+    "camera": {
+        "left_id": 1,
+        "right_id": 2,
+        "width": 640,
+        "height": 480
+    },
+    "calibration": {
+        "chessboard_size": [
+            7,
+            7
+        ],
+        "square_size_meters": 0.025,
+        "min_frames": 15,
+        "output_file": "stereo_params.npz"
+    },
+    "stereo": {
+        "min_disparity": 0,
+        "num_disparities": 96,
+        "block_size": 5,
+        "depth_visualizer": {
+            "min_z": 0.1,
+            "max_z": 1.5
+        }
+    }
+}
