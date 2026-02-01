@@ -1,72 +1,49 @@
-"""
-DoomSphere Unified Launcher
-===========================
-Main entry point for the DoomSphere Depth System.
-Allows easy switching between Stereo, AI Depth, and Calibration modes.
-"""
-
 import os
 import sys
 import subprocess
 import time
 
-def clear_screen():
+
+def clear():
     os.system('cls' if os.name == 'nt' else 'clear')
 
-def print_header():
-    print("=" * 60)
-    print("  DOOMSPHERE - ADVANCED DEPTH SYSTEM")
-    print("=" * 60)
-    print("")
 
-def check_file(filename):
-    if not os.path.exists(filename):
-        print(f"Error: File '{filename}' not found!")
-        return False
-    return True
-
-def run_script(script_name, args=[]):
-    if not check_file(script_name):
-        input("\nPress Enter to continue...")
+def run(script):
+    if not os.path.exists(script):
+        print(f"{script} not found!")
+        input("Enter...")
         return
-
-    cmd = [sys.executable, script_name] + args
-    print(f"\nLaunching {script_name}...")
     try:
-        subprocess.run(cmd)
+        subprocess.run([sys.executable, script])
     except KeyboardInterrupt:
         pass
-    except Exception as e:
-        print(f"Error running script: {e}")
-    
-    print("\nProcess finished.")
-    input("Press Enter to return to menu...")
+    input("Enter to return...")
+
 
 def main():
     while True:
-        clear_screen()
-        print_header()
-        print("Select Mode:")
-        print("  1. Stereo Depth View (Dual Camera)")
-        print("  2. MiDaS AI Depth (Single Camera)")
-        print("  3. Stereo Calibration Tool")
-        print("  4. Exit")
-        print("")
+        clear()
+        print("=" * 40)
+        print("  DOOMSPHERE")
+        print("=" * 40)
+        print("1. Stereo Depth")
+        print("2. MiDaS AI Depth")
+        print("3. Calibration")
+        print("4. Exit")
         
-        choice = input("Enter choice (1-4): ").strip()
+        c = input("\nChoice: ").strip()
         
-        if choice == '1':
-            run_script("depth_camera.py")
-        elif choice == '2':
-            run_script("midas_depth.py")
-        elif choice == '3':
-            run_script("calibrate_stereo.py")
-        elif choice == '4':
-            print("\nExiting DoomSphere. Goodbye!")
+        if c == '1':
+            run("depth_camera.py")
+        elif c == '2':
+            run("midas_depth.py")
+        elif c == '3':
+            run("calibrate_stereo.py")
+        elif c == '4':
             break
         else:
-            print("\nInvalid choice!")
-            time.sleep(1)
+            time.sleep(0.3)
+
 
 if __name__ == "__main__":
     main()
