@@ -2,16 +2,8 @@ import cv2
 import numpy as np
 import time
 import config
+import calibration as calib
 from camera import open_camera
-
-
-def calc_reproj_errors(objpts, imgpts, rvecs, tvecs, K, D):
-    all_errs = []
-    for i in range(len(objpts)):
-        proj, _ = cv2.projectPoints(objpts[i], rvecs[i], tvecs[i], K, D)
-        err = np.linalg.norm(imgpts[i].reshape(-1, 2) - proj.reshape(-1, 2), axis=1)
-        all_errs.extend(err)
-    return np.array(all_errs)
 
 
 def main():
@@ -28,10 +20,7 @@ def main():
     TARGET = cal_cfg.get('target_captures', 55)
     MIN_CAPS = cal_cfg.get('min_captures', 30)
     
-    objp = np.zeros((BOARD[0] * BOARD[1], 3), np.float32)
-    objp[:, :2] = np.mgrid[0:BOARD[0], 0:BOARD[1]].T.reshape(-1, 2)
-    objp *= SQUARE
-
+    objp = calib.build_object_points(BOARD, SQUARE)
     objpoints, imgpts_left, imgpts_right = [], [], []
 
     w, h = cam_cfg['width'], cam_cfg['height']
@@ -64,23 +53,15 @@ def main():
             gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
             gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
             
-            flags = cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE
-            found1, corners1 = cv2.findChessboardCorners(gray1, BOARD, flags)
-            found2, corners2 = cv2.findChessboardCorners(gray2, BOARD, flags)
+            found1, corners1 = calib.find_corners(gray1, BOARD)
+            found2, corners2 = calib.find_corners(gray2, BOARD)
             
             vis1, vis2 = frame1.copy(), frame2.copy()
             both = found1 and found2
             ok = False
             
             if both:
-                hull1 = cv2.convexHull(corners1)
-                area1 = cv2.contourArea(hull1)
-                if area1 > w * h * 0.05:
-                    pts1 = corners1.reshape(-1, 2)
-                    edge = 20
-                    if not (np.any(pts1[:, 0] < edge) or np.any(pts1[:, 0] > w - edge) or
-                            np.any(pts1[:, 1] < edge) or np.any(pts1[:, 1] > h - edge)):
-                        ok = True
+                ok = calib.check_quality(corners1, w, h) and calib.check_quality(corners2, w, h)
                 cv2.drawChessboardCorners(vis1, BOARD, corners1, found1)
                 cv2.drawChessboardCorners(vis2, BOARD, corners2, found2)
             
@@ -94,9 +75,8 @@ def main():
             
             if auto_mode and both and ok and count < TARGET:
                 if time.time() - last_cap >= 1.2:
-                    crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-                    c1 = cv2.cornerSubPix(gray1, corners1, (11, 11), (-1, -1), crit)
-                    c2 = cv2.cornerSubPix(gray2, corners2, (11, 11), (-1, -1), crit)
+                    c1 = calib.refine_corners(gray1, corners1)
+                    c2 = calib.refine_corners(gray2, corners2)
                     objpoints.append(objp)
                     imgpts_left.append(c1)
                     imgpts_right.append(c2)
@@ -111,9 +91,8 @@ def main():
                 auto_mode = not auto_mode
                 last_cap = time.time()
             elif key == 32 and both and ok:
-                crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-                c1 = cv2.cornerSubPix(gray1, corners1, (11, 11), (-1, -1), crit)
-                c2 = cv2.cornerSubPix(gray2, corners2, (11, 11), (-1, -1), crit)
+                c1 = calib.refine_corners(gray1, corners1)
+                c2 = calib.refine_corners(gray2, corners2)
                 objpoints.append(objp)
                 imgpts_left.append(c1)
                 imgpts_right.append(c2)
@@ -132,19 +111,12 @@ def main():
 
     print(f"\nCalibrating with {count} samples...")
     
-    ret_l, K1, D1, rv_l, tv_l = cv2.calibrateCamera(objpoints, imgpts_left, (w, h), None, None)
-    ret_r, K2, D2, rv_r, tv_r = cv2.calibrateCamera(objpoints, imgpts_right, (w, h), None, None)
-    
-    crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-5)
-    flags = cv2.CALIB_SAME_FOCAL_LENGTH + cv2.CALIB_ZERO_TANGENT_DIST
-    ret, K1, D1, K2, D2, R, T, E, F = cv2.stereoCalibrate(
-        objpoints, imgpts_left, imgpts_right, K1, D1, K2, D2, (w, h), criteria=crit, flags=flags)
-    
-    R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(K1, D1, K2, D2, (w, h), R, T, flags=cv2.CALIB_ZERO_DISPARITY, alpha=0)
+    ret, K1, D1, K2, D2, R, T, R1, R2, P1, P2, Q = calib.calibrate_stereo(
+        objpoints, imgpts_left, imgpts_right, (w, h)
+    )
     
     print(f"\nRMS: {ret:.4f} px, Baseline: {np.linalg.norm(T)*1000:.1f} mm")
-    quality = "EXCELLENT" if ret < 0.5 else "GOOD" if ret < 1.0 else "OK" if ret < 2.0 else "BAD"
-    print(f"Quality: {quality}")
+    print(f"Quality: {calib.quality_rating(ret)}")
     
     config.save_calibration(cal_cfg['output_path'], K1, D1, K2, D2, R, T, R1, R2, P1, P2, Q, (w, h))
     print("Done!")

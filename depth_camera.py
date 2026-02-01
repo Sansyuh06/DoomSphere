@@ -4,6 +4,9 @@ import time
 import config
 import pointcloud
 import rendering
+import stereo
+import display
+import mouse
 from camera import ThreadedCamera
 from collections import deque
 
@@ -12,20 +15,6 @@ try:
     HAS_O3D = True
 except ImportError:
     HAS_O3D = False
-
-mouse = {'drag': False, 'lx': 0, 'ly': 0, 'rx': -20, 'ry': 0}
-
-def on_mouse(event, x, y, flags, param):
-    global mouse
-    if event == cv2.EVENT_LBUTTONDOWN:
-        mouse['drag'] = True
-        mouse['lx'], mouse['ly'] = x, y
-    elif event == cv2.EVENT_LBUTTONUP:
-        mouse['drag'] = False
-    elif event == cv2.EVENT_MOUSEMOVE and mouse['drag']:
-        mouse['ry'] += (x - mouse['lx']) * 0.5
-        mouse['rx'] += (y - mouse['ly']) * 0.5
-        mouse['lx'], mouse['ly'] = x, y
 
 
 def main():
@@ -53,8 +42,7 @@ def main():
     else:
         R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(K1, D1, K2, D2, (w, h), R, T)
     
-    map1l, map2l = cv2.initUndistortRectifyMap(K1, D1, R1, P1, (w, h), cv2.CV_16SC2)
-    map1r, map2r = cv2.initUndistortRectifyMap(K2, D2, R2, P2, (w, h), cv2.CV_16SC2)
+    map1l, map2l, map1r, map2r = stereo.build_rectify_maps(K1, D1, K2, D2, R1, R2, P1, P2, (w, h))
     
     focal = K1[0, 0]
     baseline = s_cfg.get('baseline_meters', 0.08)
@@ -64,27 +52,8 @@ def main():
     num_d = s_cfg.get('num_disparities', auto_p['num_disparities'])
     blk = s_cfg.get('block_size', 5)
     
-    stereo_l = cv2.StereoSGBM_create(
-        minDisparity=min_d, numDisparities=num_d, blockSize=blk,
-        P1=8 * 3 * blk**2, P2=32 * 3 * blk**2,
-        disp12MaxDiff=s_cfg.get('disp12_max_diff', 5),
-        uniquenessRatio=s_cfg.get('uniqueness_ratio', 5),
-        speckleWindowSize=s_cfg.get('speckle_window_size', 200),
-        speckleRange=s_cfg.get('speckle_range', 2),
-        preFilterCap=s_cfg.get('pre_filter_cap', 31),
-        mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY
-    )
-    
-    use_wls = s_cfg.get('use_wls_filter', True)
-    wls, stereo_r = None, None
-    if use_wls:
-        try:
-            stereo_r = cv2.ximgproc.createRightMatcher(stereo_l)
-            wls = cv2.ximgproc.createDisparityWLSFilter(stereo_l)
-            wls.setLambda(s_cfg.get('wls_lambda', 8000))
-            wls.setSigmaColor(s_cfg.get('wls_sigma', 1.2))
-        except:
-            use_wls = False
+    stereo_l = stereo.create_sgbm(min_d, num_d, blk, s_cfg)
+    stereo_r, wls = stereo.create_wls(stereo_l, s_cfg) if s_cfg.get('use_wls_filter', True) else (None, None)
     
     cam_l = ThreadedCamera(c_cfg['left_id'], c_cfg['width'], c_cfg['height']).start()
     cam_r = ThreadedCamera(c_cfg['right_id'], c_cfg['width'], c_cfg['height']).start()
@@ -102,14 +71,13 @@ def main():
         opt.point_size = 2.5
     else:
         cv2.namedWindow("Ghost View")
-        cv2.setMouseCallback("Ghost View", on_mouse)
+        cv2.setMouseCallback("Ghost View", mouse.callback)
     
     use_tex = False
     prev_t = time.time()
     disp_buf = deque(maxlen=5)
     use_temp = True
     use_conf = True
-    conf_thresh = 15.0
     
     ghost_img = np.zeros((600, 600, 3), dtype=np.uint8)
     
@@ -126,17 +94,9 @@ def main():
         gray_r = cv2.cvtColor(rect_r, cv2.COLOR_BGR2GRAY)
         
         if use_conf:
-            sx = cv2.Sobel(gray_l, cv2.CV_64F, 1, 0, ksize=3)
-            sy = cv2.Sobel(gray_l, cv2.CV_64F, 0, 1, ksize=3)
-            low_tex = np.sqrt(sx**2 + sy**2) < conf_thresh
+            low_tex = display.low_texture_mask(gray_l)
         
-        disp_l = stereo_l.compute(gray_l, gray_r)
-        
-        if use_wls and wls:
-            disp_r = stereo_r.compute(gray_r, gray_l)
-            disp = wls.filter(disp_l, gray_l, disparity_map_right=disp_r).astype(np.float32) / 16.0
-        else:
-            disp = disp_l.astype(np.float32) / 16.0
+        disp = stereo.compute_disparity(stereo_l, stereo_r, wls, gray_l, gray_r)
         
         if use_temp:
             disp_buf.append(disp)
@@ -149,15 +109,13 @@ def main():
         if use_conf:
             disp[low_tex] = 0
         
-        dv = np.clip((disp - min_d) / num_d, 0, 1)
-        dimg = (dv * 255).astype(np.uint8)
-        dc = cv2.applyColorMap(dimg, cv2.COLORMAP_JET)
+        dc = display.colorize_depth(disp, min_d, num_d)
         
         now = time.time()
         fps = 1.0 / (now - prev_t + 1e-5)
         prev_t = now
         
-        cv2.putText(dc, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        display.overlay_fps(dc, fps)
         cv2.imshow("Depth View", dc)
         
         colors_src = cv2.cvtColor(rect_l, cv2.COLOR_BGR2RGB) if use_tex else None
@@ -193,8 +151,9 @@ def main():
                     vis.poll_events()
                     vis.update_renderer()
                 else:
-                    ghost_img = rendering.render_cloud(pts, vc, rx=mouse['rx'], ry=mouse['ry'])
-                    cv2.putText(ghost_img, f"Pts: {len(pts)}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                    rx, ry = mouse.get_rotation()
+                    ghost_img = rendering.render_cloud(pts, vc, rx=rx, ry=ry)
+                    display.overlay_points(ghost_img, len(pts))
                 
                 map_img = rendering.render_topdown(pts)
                 cv2.imshow("Map", map_img)
