@@ -3,16 +3,27 @@ import numpy as np
 
 
 def find_corners(gray, board_size):
-    flags = cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE
-    return cv2.findChessboardCorners(gray, board_size, flags)
+    flags = (cv2.CALIB_CB_ADAPTIVE_THRESH + 
+             cv2.CALIB_CB_NORMALIZE_IMAGE + 
+             cv2.CALIB_CB_FAST_CHECK)
+    
+    found, corners = cv2.findChessboardCorners(gray, board_size, flags)
+    
+    if not found:
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        found, corners = cv2.findChessboardCorners(enhanced, board_size, 
+            cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE)
+    
+    return found, corners
 
 
 def refine_corners(gray, corners):
-    crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-    return cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), crit)
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+    return cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
 
 
-def check_quality(corners, w, h, min_area_ratio=0.05, edge_margin=20):
+def check_quality(corners, w, h, min_area_ratio=0.02, edge_margin=10):
     hull = cv2.convexHull(corners)
     area = cv2.contourArea(hull)
     
@@ -27,15 +38,6 @@ def check_quality(corners, w, h, min_area_ratio=0.05, edge_margin=20):
     return True
 
 
-def calc_reproj_errors(objpts, imgpts, rvecs, tvecs, K, D):
-    all_errs = []
-    for i in range(len(objpts)):
-        proj, _ = cv2.projectPoints(objpts[i], rvecs[i], tvecs[i], K, D)
-        err = np.linalg.norm(imgpts[i].reshape(-1, 2) - proj.reshape(-1, 2), axis=1)
-        all_errs.extend(err)
-    return np.array(all_errs)
-
-
 def build_object_points(board_size, square_size):
     objp = np.zeros((board_size[0] * board_size[1], 3), np.float32)
     objp[:, :2] = np.mgrid[0:board_size[0], 0:board_size[1]].T.reshape(-1, 2)
@@ -43,22 +45,20 @@ def build_object_points(board_size, square_size):
     return objp
 
 
-def calibrate_stereo(objpoints, imgpts_l, imgpts_r, size):
-    w, h = size
+def calibrate_stereo(objpoints, imgpts_l, imgpts_r, img_size):
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-5)
     
-    ret_l, K1, D1, rv_l, tv_l = cv2.calibrateCamera(objpoints, imgpts_l, (w, h), None, None)
-    ret_r, K2, D2, rv_r, tv_r = cv2.calibrateCamera(objpoints, imgpts_r, (w, h), None, None)
-    
-    crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-5)
-    flags = cv2.CALIB_SAME_FOCAL_LENGTH + cv2.CALIB_ZERO_TANGENT_DIST
+    ret1, K1, D1, _, _ = cv2.calibrateCamera(objpoints, imgpts_l, img_size, None, None)
+    ret2, K2, D2, _, _ = cv2.calibrateCamera(objpoints, imgpts_r, img_size, None, None)
     
     ret, K1, D1, K2, D2, R, T, E, F = cv2.stereoCalibrate(
-        objpoints, imgpts_l, imgpts_r, K1, D1, K2, D2, (w, h), 
-        criteria=crit, flags=flags
+        objpoints, imgpts_l, imgpts_r,
+        K1, D1, K2, D2, img_size,
+        criteria=criteria, flags=cv2.CALIB_FIX_INTRINSIC
     )
     
     R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(
-        K1, D1, K2, D2, (w, h), R, T, 
+        K1, D1, K2, D2, img_size, R, T,
         flags=cv2.CALIB_ZERO_DISPARITY, alpha=0
     )
     
@@ -66,10 +66,11 @@ def calibrate_stereo(objpoints, imgpts_l, imgpts_r, size):
 
 
 def quality_rating(rms):
-    if rms < 0.5:
+    if rms < 0.3:
         return "EXCELLENT"
-    elif rms < 1.0:
+    elif rms < 0.5:
         return "GOOD"
-    elif rms < 2.0:
+    elif rms < 1.0:
         return "OK"
-    return "BAD"
+    else:
+        return "POOR"

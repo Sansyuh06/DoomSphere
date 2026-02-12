@@ -1,5 +1,4 @@
 import cv2
-import numpy as np
 import threading
 import time
 
@@ -13,19 +12,29 @@ class ThreadedCamera:
         self.running = False
         self.thread = None
         self.lock = threading.Lock()
+        self.fail_count = 0
         
-        for backend in [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]:
-            self.cap = cv2.VideoCapture(src, backend)
-            if self.cap.isOpened():
-                break
+        # DSHOW only on windows - most reliable for USB cams
+        self.cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+        time.sleep(0.3)
         
-        if self.cap and self.cap.isOpened():
+        if self.cap.isOpened():
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            self.ret, self.frame = self.cap.read()
-        else:
-            self.cap = None
+            # try a few reads to let camera warm up
+            for _ in range(5):
+                ret, frame = self.cap.read()
+                if ret and frame is not None:
+                    self.ret = True
+                    self.frame = frame
+                    print(f"Camera {src}: OK")
+                    return
+                time.sleep(0.1)
+            self.cap.release()
+        
+        print(f"Camera {src}: FAILED")
+        self.cap = None
 
     def start(self):
         if self.cap is None:
@@ -37,31 +46,53 @@ class ThreadedCamera:
 
     def _loop(self):
         while self.running and self.cap:
-            ret, frame = self.cap.read()
-            if ret:
-                with self.lock:
-                    self.ret = ret
-                    self.frame = frame
+            try:
+                ret, frame = self.cap.read()
+                if ret and frame is not None:
+                    with self.lock:
+                        self.ret = True
+                        self.frame = frame
+                        self.fail_count = 0
+                else:
+                    self.fail_count += 1
+                    if self.fail_count > 50:
+                        print(f"Camera {self.src}: lost connection")
+                        self.running = False
+                        break
+                    time.sleep(0.03)
+            except:
+                time.sleep(0.03)
             time.sleep(0.001)
 
     def read(self):
         with self.lock:
-            return self.ret, self.frame.copy() if self.frame is not None else None
+            if self.frame is not None:
+                return self.ret, self.frame.copy()
+            return False, None
+
+    def is_ok(self):
+        return self.cap is not None and self.cap.isOpened()
 
     def stop(self):
         self.running = False
         if self.thread:
-            self.thread.join(timeout=1.0)
+            self.thread.join(timeout=2.0)
         if self.cap and self.cap.isOpened():
             self.cap.release()
 
 
 def open_camera(cam_id, w, h):
-    for backend in [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]:
-        cap = cv2.VideoCapture(cam_id, backend)
-        if cap.isOpened():
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
-            return cap
+    cap = cv2.VideoCapture(cam_id, cv2.CAP_DSHOW)
+    time.sleep(0.3)
+    if cap.isOpened():
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+        for _ in range(5):
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                print(f"Camera {cam_id}: OK")
+                return cap
+            time.sleep(0.1)
         cap.release()
+    print(f"Camera {cam_id}: FAILED")
     return None

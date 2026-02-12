@@ -2,14 +2,20 @@ import cv2
 import numpy as np
 
 
-def render_cloud(pts, colors, w=600, h=600, rx=0, ry=0):
+def render_cloud(pts, colors, w=600, h=600, rx=0, ry=0, center=None):
     canvas = np.zeros((h, w, 3), dtype=np.uint8)
     if len(pts) == 0:
-        return canvas
+        return canvas, center
     
-    center = np.median(pts, axis=0)
+    if center is None:
+        center = np.median(pts, axis=0)
+    else:
+        new_center = np.median(pts, axis=0)
+        center = 0.1 * new_center + 0.9 * center
+    
     p = pts - center
-    scale = 2.0 / (np.percentile(np.abs(p), 95) + 0.01)
+    spread = np.percentile(np.abs(p), 90) + 0.01
+    scale = 2.0 / spread
     p *= scale
     
     ay = np.radians(ry)
@@ -24,25 +30,31 @@ def render_cloud(pts, colors, w=600, h=600, rx=0, ry=0):
     z2 = y * sx + z * cx
     
     f = 400
-    zp = z2 + 3.0
-    ok = zp > 0.1
+    zp = z2 + 4.0
+    ok = zp > 0.2
     
-    u = (x[ok] * f / zp[ok]) + w // 2
-    v = (y2[ok] * f / zp[ok]) + h // 2
+    u = (x[ok] * f / zp[ok] + w // 2).astype(int)
+    v = (y2[ok] * f / zp[ok] + h // 2).astype(int)
     c = colors[ok]
     
-    good = (u >= 0) & (u < w) & (v >= 0) & (v < h)
-    u = np.clip(u[good].astype(int), 0, w - 2)
-    v = np.clip(v[good].astype(int), 0, h - 2)
+    good = (u >= 1) & (u < w - 2) & (v >= 1) & (v < h - 2)
+    u = u[good]
+    v = v[good]
     c = (c[good] * 255).astype(np.uint8)
     
-    canvas[v, u] = c
-    canvas[v, u + 1] = c
-    canvas[v + 1, u] = c
-    return canvas
+    depth_order = np.argsort(-zp[ok][good])
+    u = u[depth_order]
+    v = v[depth_order]
+    c = c[depth_order]
+    
+    for dy in range(-1, 2):
+        for dx in range(-1, 2):
+            canvas[v + dy, u + dx] = c
+    
+    return canvas, center
 
 
-def render_topdown(pts, w=400, h=400, x_range=(-1.0, 1.0), z_range=(0.0, 3.0)):
+def render_topdown(pts, w=400, h=400, x_range=(-2.0, 2.0), z_range=(0.0, 5.0)):
     canvas = np.zeros((h, w, 3), dtype=np.uint8)
     if len(pts) == 0:
         return canvas
@@ -56,14 +68,15 @@ def render_topdown(pts, w=400, h=400, x_range=(-1.0, 1.0), z_range=(0.0, 3.0)):
     u = ((p[:, 0] - x_range[0]) / (x_range[1] - x_range[0]) * w).astype(int)
     v = ((1.0 - (p[:, 2] - z_range[0]) / (z_range[1] - z_range[0])) * h).astype(int)
     
+    u = np.clip(u, 0, w - 1)
+    v = np.clip(v, 0, h - 1)
+    
     ht = -p[:, 1]
     hn = np.clip((ht + 0.5) / 1.0, 0, 1)
     c = np.zeros((len(ht), 3), dtype=np.uint8)
     c[:, 0] = (255 * (1 - hn)).astype(np.uint8)
     c[:, 2] = (255 * hn).astype(np.uint8)
     
-    u = np.clip(u, 0, w - 1)
-    v = np.clip(v, 0, h - 1)
     canvas[v, u] = c
     return canvas
 

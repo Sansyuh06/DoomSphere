@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 
-def low_texture_mask(gray, thresh=15.0):
+def low_texture_mask(gray, thresh=8.0):
     sx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
     sy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
     return np.sqrt(sx**2 + sy**2) < thresh

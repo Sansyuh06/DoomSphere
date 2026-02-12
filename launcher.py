@@ -26,20 +26,20 @@ def main():
         print("=" * 40)
         print("  DOOMSPHERE")
         print("=" * 40)
-        print("1. Stereo Depth")
-        print("2. MiDaS AI Depth")
-        print("3. Calibration")
-        print("4. Exit")
+        print("1. Start (Calibrate + Depth)")
+        print("2. Recalibrate")
+        print("3. Exit")
         
         c = input("\nChoice: ").strip()
         
         if c == '1':
-            run("depth_camera.py")
+            run("main.py")
         elif c == '2':
-            run("midas_depth.py")
+            if os.path.exists("stereo_params.npz"):
+                os.remove("stereo_params.npz")
+                print("Old calibration removed.")
+            run("main.py")
         elif c == '3':
-            run("calibrate_stereo.py")
-        elif c == '4':
             break
         else:
             time.sleep(0.3)

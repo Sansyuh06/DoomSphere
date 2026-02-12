@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 
-def compute_sgbm_params(baseline_m, focal_px, z_min, z_max, block_sz=5):
+def compute_sgbm_params(baseline_m, focal_px, z_min, z_max, block_sz=7):
     d_max = (baseline_m * focal_px) / z_min
     d_min = (baseline_m * focal_px) / z_max
     
@@ -31,13 +31,13 @@ def apply_filters(disp, median_k=5, use_bilateral=False):
         d_min, d_max = result.min(), result.max()
         if d_max > d_min:
             norm = ((result - d_min) / (d_max - d_min) * 255).astype(np.uint8)
-            norm = cv2.bilateralFilter(norm, 5, 50, 50)
+            norm = cv2.bilateralFilter(norm, 7, 75, 75)
             result = (norm.astype(np.float32) / 255) * (d_max - d_min) + d_min
     
     return result
 
 
-def make_pointcloud(disparity, Q, z_min, z_max, colors=None, voxel_sz=0.01, outlier_pct=1):
+def make_pointcloud(disparity, Q, z_min, z_max, colors=None, voxel_sz=0.01, outlier_pct=2):
     xyz = cv2.reprojectImageTo3D(disparity, Q)
     z = xyz[:, :, 2]
     mask = (disparity > 0) & np.isfinite(z) & (z > z_min) & (z < z_max)
@@ -47,12 +47,19 @@ def make_pointcloud(disparity, Q, z_min, z_max, colors=None, voxel_sz=0.01, outl
         return np.zeros((0, 3), dtype=np.float32), None, mask
     
     if outlier_pct > 0:
-        z_vals = valid_pts[:, 2]
-        low = np.percentile(z_vals, outlier_pct)
-        high = np.percentile(z_vals, 100 - outlier_pct)
-        inliers = (z_vals >= low) & (z_vals <= high)
-        valid_pts = valid_pts[inliers]
-        valid_colors = colors[mask][inliers] if colors is not None else None
+        for axis in range(3):
+            vals = valid_pts[:, axis]
+            low = np.percentile(vals, outlier_pct)
+            high = np.percentile(vals, 100 - outlier_pct)
+            keep = (vals >= low) & (vals <= high)
+            valid_pts = valid_pts[keep]
+            if colors is not None:
+                if axis == 0:
+                    valid_colors = colors[mask][keep]
+                else:
+                    valid_colors = valid_colors[keep]
+            else:
+                valid_colors = None
     else:
         valid_colors = colors[mask] if colors is not None else None
     
